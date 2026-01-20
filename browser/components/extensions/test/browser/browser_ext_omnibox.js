@@ -7,6 +7,8 @@ const { UrlbarTestUtils } = ChromeUtils.importESModule(
 );
 
 const keyword = "VeryUniqueKeywordThatDoesNeverMatchAnyTestUrl";
+const descriptionKeyword =
+  "VeryUniqueKeywordThatDoesNeverMatchOmniboxStyleTest";
 
 // This test does a lot. To ease debugging, we'll sometimes print the lines.
 function getCallerLines() {
@@ -501,6 +503,66 @@ add_task(async function test_omnibox_event_page() {
 
   await extension.unload();
   await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function test_omnibox_description_styles_parsing() {
+  UrlbarTestUtils.init(this);
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      omnibox: {
+        keyword: descriptionKeyword,
+      },
+    },
+    background() {
+      browser.omnibox.setDefaultSuggestion({
+        description: "<match>match</match>foo",
+      });
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([
+          {
+            content: "bar",
+            description: "<dim>dim</dim>bar",
+          },
+        ]);
+      });
+      browser.test.sendMessage("ready");
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("ready");
+
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: `${descriptionKeyword} q`,
+  });
+
+  let heuristicResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
+  Assert.equal(
+    heuristicResult.result.payload.title,
+    "matchfoo",
+    "Default suggestion description is parsed to plain text"
+  );
+  Assert.deepEqual(
+    heuristicResult.result.payload.descriptionStyleRanges,
+    [{ offset: 0, length: 5, type: "match" }],
+    "Default suggestion style ranges are attached"
+  );
+
+  let suggestionResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  Assert.equal(
+    suggestionResult.result.payload.title,
+    "dimbar",
+    "Suggestion description is parsed to plain text"
+  );
+  Assert.deepEqual(
+    suggestionResult.result.payload.descriptionStyleRanges,
+    [{ offset: 0, length: 3, type: "dim" }],
+    "Suggestion style ranges are attached"
+  );
+
+  await UrlbarTestUtils.promisePopupClose(window);
+  await extension.unload();
 });
 
 add_task(async function test_omnibox_input_is_user_interaction() {

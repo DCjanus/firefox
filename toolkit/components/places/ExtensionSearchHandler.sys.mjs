@@ -14,6 +14,77 @@ let gActiveInputSession = null;
 // the input changes or the input session ends.
 let gCurrentCallbackID = 0;
 
+const DESCRIPTION_STYLE_TAGS = new Set(["match", "dim", "url"]);
+
+function buildDescriptionFromNode(node, result) {
+  for (let child of node.childNodes) {
+    if (child.nodeType === child.TEXT_NODE) {
+      result.plainText += child.nodeValue ?? "";
+      continue;
+    }
+
+    if (child.nodeType !== child.ELEMENT_NODE) {
+      if (child.childNodes && child.childNodes.length) {
+        buildDescriptionFromNode(child, result);
+      }
+      continue;
+    }
+
+    let tagName = child.localName?.toLowerCase() ?? "";
+    if (!DESCRIPTION_STYLE_TAGS.has(tagName)) {
+      buildDescriptionFromNode(child, result);
+      continue;
+    }
+
+    let offset = result.plainText.length;
+    buildDescriptionFromNode(child, result);
+    let length = result.plainText.length - offset;
+    if (length > 0) {
+      result.styleRanges.push({
+        offset,
+        length,
+        type: tagName,
+      });
+    }
+  }
+}
+
+function parseDescriptionFromDoc(doc) {
+  if (!doc) {
+    return null;
+  }
+  let root = doc.documentElement;
+  if (!root || root.nodeName === "parsererror") {
+    return null;
+  }
+  let fragment =
+    root.localName === "fragment"
+      ? root
+      : doc.getElementsByTagName("fragment")[0];
+  if (!fragment) {
+    return null;
+  }
+  let result = { plainText: "", styleRanges: [] };
+  buildDescriptionFromNode(fragment, result);
+  return result;
+}
+
+function parseOmniboxDescription(description = "") {
+  let parser = new DOMParser();
+  let wrapped = `<fragment>${description}</fragment>`;
+  let parsed = parseDescriptionFromDoc(
+    parser.parseFromString(wrapped, "application/xml")
+  );
+  if (parsed) {
+    return parsed;
+  }
+  let htmlDoc = parser.parseFromString(wrapped, "text/html");
+  return parseDescriptionFromDoc(htmlDoc) ?? {
+    plainText: description,
+    styleRanges: [],
+  };
+}
+
 /**
  * Handles keeping track of information associated to the registered keyword.
  */
@@ -21,6 +92,7 @@ class KeywordInfo {
   constructor(extension, description) {
     this._extension = extension;
     this._description = description;
+    this._descriptionStyleRanges = [];
   }
 
   get description() {
@@ -29,6 +101,14 @@ class KeywordInfo {
 
   set description(desc) {
     this._description = desc;
+  }
+
+  get descriptionStyleRanges() {
+    return this._descriptionStyleRanges;
+  }
+
+  set descriptionStyleRanges(ranges) {
+    this._descriptionStyleRanges = ranges;
   }
 
   get extension() {
@@ -153,6 +233,13 @@ export var ExtensionSearchHandler = Object.freeze({
     return gKeywordMap.get(keyword).description;
   },
 
+  getDescriptionStyleRanges(keyword) {
+    if (!gKeywordMap.has(keyword)) {
+      throw new Error(`The keyword provided is not registered: "${keyword}"`);
+    }
+    return gKeywordMap.get(keyword).descriptionStyleRanges;
+  },
+
   /**
    * Sets the default suggestion for the registered keyword. The suggestion's
    * description will be used for the comment in the heuristic result.
@@ -166,7 +253,10 @@ export var ExtensionSearchHandler = Object.freeze({
     if (!gKeywordMap.has(keyword)) {
       throw new Error(`The keyword provided is not registered: "${keyword}"`);
     }
-    gKeywordMap.get(keyword).description = description;
+    let { plainText, styleRanges } = parseOmniboxDescription(description);
+    let keywordInfo = gKeywordMap.get(keyword);
+    keywordInfo.description = plainText;
+    keywordInfo.descriptionStyleRanges = styleRanges;
   },
 
   /**
@@ -195,7 +285,29 @@ export var ExtensionSearchHandler = Object.freeze({
       );
     }
 
-    gActiveInputSession.addSuggestions(suggestions);
+    let parsedSuggestions = Array.isArray(suggestions)
+      ? suggestions.map(suggestion => {
+          if (!suggestion || typeof suggestion.description !== "string") {
+            return suggestion;
+          }
+          let { plainText, styleRanges } = parseOmniboxDescription(
+            suggestion.description
+          );
+          if (
+            plainText === suggestion.description &&
+            styleRanges.length === 0
+          ) {
+            return suggestion;
+          }
+          return {
+            ...suggestion,
+            description: plainText,
+            descriptionStyleRanges: styleRanges,
+          };
+        })
+      : suggestions;
+
+    gActiveInputSession.addSuggestions(parsedSuggestions);
   },
 
   /**

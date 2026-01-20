@@ -2128,6 +2128,24 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       content: {
         type: "string",
       },
+      descriptionStyleRanges: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["offset", "length", "type"],
+          properties: {
+            offset: {
+              type: "number",
+            },
+            length: {
+              type: "number",
+            },
+            type: {
+              type: "string",
+            },
+          },
+        },
+      },
       icon: {
         type: "string",
       },

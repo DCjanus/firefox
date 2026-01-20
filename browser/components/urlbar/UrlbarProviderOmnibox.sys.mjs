@@ -98,6 +98,8 @@ export class UrlbarProviderOmnibox extends UrlbarProvider {
     // Fetch heuristic result.
     let keyword = queryContext.tokens[0].value;
     let description = lazy.ExtensionSearchHandler.getDescription(keyword);
+    let descriptionStyleRanges =
+      lazy.ExtensionSearchHandler.getDescriptionStyleRanges(keyword);
     let heuristicResult = new lazy.UrlbarResult({
       type: UrlbarUtils.RESULT_TYPE.OMNIBOX,
       source: UrlbarUtils.RESULT_SOURCE.ADDON,
@@ -107,6 +109,7 @@ export class UrlbarProviderOmnibox extends UrlbarProvider {
         content: queryContext.searchString,
         keyword: queryContext.tokens[0].value,
         icon: UrlbarUtils.ICON.EXTENSION,
+        descriptionStyleRanges,
       },
       highlights: {
         title: UrlbarUtils.HIGHLIGHT.TYPED,
@@ -142,6 +145,7 @@ export class UrlbarProviderOmnibox extends UrlbarProvider {
               keyword: queryContext.tokens[0].value,
               isBlockable: suggestion.deletable,
               icon: UrlbarUtils.ICON.EXTENSION,
+              descriptionStyleRanges: suggestion.descriptionStyleRanges,
             },
             highlights: {
               title: UrlbarUtils.HIGHLIGHT.TYPED,
