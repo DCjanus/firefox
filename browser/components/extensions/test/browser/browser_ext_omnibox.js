@@ -7,6 +7,12 @@ const { UrlbarTestUtils } = ChromeUtils.importESModule(
 );
 
 const keyword = "VeryUniqueKeywordThatDoesNeverMatchAnyTestUrl";
+const descriptionKeyword =
+  "VeryUniqueKeywordThatDoesNeverMatchOmniboxStyleTest";
+const descriptionNestedKeyword =
+  "VeryUniqueKeywordThatDoesNeverMatchOmniboxStyleNestedTest";
+const descriptionEscapedKeyword =
+  "VeryUniqueKeywordThatDoesNeverMatchOmniboxStyleEscapedTest";
 
 // This test does a lot. To ease debugging, we'll sometimes print the lines.
 function getCallerLines() {
@@ -501,6 +507,224 @@ add_task(async function test_omnibox_event_page() {
 
   await extension.unload();
   await SpecialPowers.popPrefEnv();
+});
+
+add_task(async function test_omnibox_description_styles_basic_parsing() {
+  UrlbarTestUtils.init(this);
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      omnibox: {
+        keyword: descriptionKeyword,
+      },
+    },
+    background() {
+      browser.omnibox.setDefaultSuggestion({
+        description: "<match>match</match>foo",
+      });
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([
+          {
+            content: "bar",
+            description: "<dim>dim</dim>bar",
+          },
+        ]);
+      });
+      browser.test.sendMessage("ready");
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("ready");
+
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: `${descriptionKeyword} q`,
+  });
+
+  let heuristicResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
+  Assert.equal(
+    heuristicResult.result.payload.title,
+    "matchfoo",
+    "Default suggestion with <match> is parsed to plain text"
+  );
+  Assert.deepEqual(
+    heuristicResult.result.payload.descriptionStyleRanges,
+    [{ offset: 0, length: 5, type: "match" }],
+    "Default suggestion <match> is recorded as a style range"
+  );
+
+  let suggestionResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  Assert.equal(
+    suggestionResult.result.payload.title,
+    "dimbar",
+    "Suggestion with <dim> is parsed to plain text"
+  );
+  Assert.deepEqual(
+    suggestionResult.result.payload.descriptionStyleRanges,
+    [{ offset: 0, length: 3, type: "dim" }],
+    "Suggestion <dim> is recorded as a style range"
+  );
+
+  await UrlbarTestUtils.promisePopupClose(window);
+  await extension.unload();
+});
+
+add_task(async function test_omnibox_description_styles_nested_and_error_parsing() {
+  UrlbarTestUtils.init(this);
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      omnibox: {
+        keyword: descriptionNestedKeyword,
+      },
+    },
+    background() {
+      browser.omnibox.setDefaultSuggestion({
+        description: "<dim><match>search</match> <url>www.mozilla.org</url></dim>",
+      });
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([
+          {
+            content: "bar",
+            description: "<foo>bar</foo> <match>baz</match>",
+          },
+          {
+            content: "qux",
+            description: "foo & bar",
+          },
+        ]);
+      });
+      browser.test.sendMessage("ready");
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("ready");
+
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: `${descriptionNestedKeyword} q`,
+  });
+
+  let heuristicResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
+  Assert.equal(
+    heuristicResult.result.payload.title,
+    "search www.mozilla.org",
+    "Nested tags are parsed to plain text"
+  );
+  Assert.deepEqual(
+    heuristicResult.result.payload.descriptionStyleRanges,
+    [
+      { offset: 0, length: 22, type: "dim" },
+      { offset: 0, length: 6, type: "match" },
+      { offset: 7, length: 15, type: "url" },
+    ],
+    "Nested tags contribute multiple style ranges"
+  );
+
+  let unknownTagResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  Assert.equal(
+    unknownTagResult.result.payload.title,
+    "bar baz",
+    "Unknown tags are ignored but their text is kept"
+  );
+  Assert.deepEqual(
+    unknownTagResult.result.payload.descriptionStyleRanges,
+    [{ offset: 4, length: 3, type: "match" }],
+    "Unknown tags do not create style ranges"
+  );
+
+  let malformedResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
+  Assert.equal(
+    malformedResult.result.payload.title,
+    "foo & bar",
+    "Malformed markup falls back to plain text"
+  );
+  Assert.deepEqual(
+    malformedResult.result.payload.descriptionStyleRanges,
+    [],
+    "Malformed markup produces no style ranges"
+  );
+
+  await UrlbarTestUtils.promisePopupClose(window);
+  await extension.unload();
+});
+
+add_task(async function test_omnibox_description_styles_entity_escaping() {
+  UrlbarTestUtils.init(this);
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      omnibox: {
+        keyword: descriptionEscapedKeyword,
+      },
+    },
+    background() {
+      browser.omnibox.setDefaultSuggestion({
+        description:
+          "foo &amp; bar &lt;baz&gt; &quot;qux&quot; &apos;quux&apos;",
+      });
+      browser.omnibox.onInputChanged.addListener((text, suggest) => {
+        suggest([
+          {
+            content: "bar",
+            description:
+              "<match>foo &amp; bar</match> &lt;baz&gt; &quot;qux&quot;",
+          },
+          {
+            content: "qux",
+            description: "&lt;match&gt;foo&lt;/match&gt; &amp; bar",
+          },
+        ]);
+      });
+      browser.test.sendMessage("ready");
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("ready");
+
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: `${descriptionEscapedKeyword} q`,
+  });
+
+  let heuristicResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
+  Assert.equal(
+    heuristicResult.result.payload.title,
+    'foo & bar <baz> "qux" \'quux\'',
+    "Escaped entities render as text in default suggestion"
+  );
+  Assert.deepEqual(
+    heuristicResult.result.payload.descriptionStyleRanges,
+    [],
+    "Escaped entities alone do not create style ranges"
+  );
+
+  let styledResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  Assert.equal(
+    styledResult.result.payload.title,
+    'foo & bar <baz> "qux"',
+    "Escaped entities render as text inside styled suggestion"
+  );
+  Assert.deepEqual(
+    styledResult.result.payload.descriptionStyleRanges,
+    [{ offset: 0, length: 9, type: "match" }],
+    "Style range remains correct after entity decoding"
+  );
+
+  let escapedTagResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
+  Assert.equal(
+    escapedTagResult.result.payload.title,
+    "<match>foo</match> & bar",
+    "Escaped tag-like text stays literal"
+  );
+  Assert.deepEqual(
+    escapedTagResult.result.payload.descriptionStyleRanges,
+    [],
+    "Escaped tag-like text produces no style ranges"
+  );
+
+  await UrlbarTestUtils.promisePopupClose(window);
+  await extension.unload();
 });
 
 add_task(async function test_omnibox_input_is_user_interaction() {
